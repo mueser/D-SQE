@@ -50,10 +50,10 @@ class IonInitParams(ParamData):
 # start (re) definition of values contained in dataclasses ...
 
 def charging():
-    p_md = MD_Params(n_relax = 2_000, n_observe = 8_700)
-    # p_sqe = SQE_Params()
+    p_md = MD_Params(n_relax = 2_000, n_observe = 11_250) # Fig. 2
+    p_sqe = SQE_Params()
     # to change from D-SQE to SQE-omega comment in next line
-    p_sqe = SQE_Params(resist = 0)
+    # p_sqe = SQE_Params(resist = 0)
     p_batt = BattParams()
     p_rce = RC_Params()
     return p_md, p_sqe, p_batt, p_rce
@@ -61,7 +61,7 @@ def charging():
 def nyquist():
     p_md = MD_Params(temperature = 300./50_000, n_relax = 1_000, n_observe = 2_000)
     p_sqe = SQE_Params()
-    p_batt = BattParams(switch_open = True, voltage = 0)
+    p_batt = BattParams(voltage = 0)
     p_rce = RC_Params()
     return p_md, p_sqe, p_batt, p_rce
 
@@ -231,27 +231,26 @@ def make_kappa(r, kappa_0):
 
     return kappa
 
-# 2Claude: It would be nice to jit this function too. Failed to make it work so far. 
-# @njit  
+@njit  
 def make_sq(kappa, r_cut, t_atom, simul_mode):
 
-    idx1 = np.empty((0,), dtype = int)
-    idx2 = np.empty((0,), dtype = int)
+    idx1 = np.empty((0,), dtype = np.int64) # np.int64 is probably overkill
+    idx2 = np.empty((0,), dtype = np.int64)
 
     n_atom = kappa.shape[0]
     for i_atom in range(n_atom-1):
         for j_atom in range(i_atom+1,n_atom):
              # place split-charges only between nearest neighbors
              if kappa[i_atom, j_atom] >= 1/r_cut:
-                 idx1 = np.append(idx1, i_atom)
-                 idx2 = np.append(idx2, j_atom)
+                 idx1 = np.append(idx1, np.int64(i_atom) )
+                 idx2 = np.append(idx2, np.int64(j_atom) )
 
     # place (internal battery resistance) split-charge between open wire terminals
     idx1 = np.append(idx1, t_atom[0])
     idx2 = np.append(idx2, t_atom[1])
 
-    if simul_mode != 'friction':
-        # Switch off Coulomb interaction of terminal atoms (Helmholtz double layer) 
+    if 1 > 2: # relict of previous code version
+        # Switch off Coulomb interaction btwn terminal atoms (electrolyte screening) 
         kappa[t_atom[0], t_atom[1]] = kappa[t_atom[1], t_atom[0]] = 0
         for i_atom in range(n_atom-2):
             kappa[i_atom, t_atom[0]] = kappa[t_atom[0], i_atom] = 0
@@ -264,11 +263,12 @@ def make_sq(kappa, r_cut, t_atom, simul_mode):
     sq_for = np.zeros(n_sqe)
     sq_batt_idx = n_sqe - 1
 
+    return sq_val, sq_vel, sq_for, idx1, idx2, sq_batt_idx
+
+def write_n_sqe(n_sqe):
     params = open('params.out', 'a')
     params.write(f"{n_sqe  = :_} \t# number of split charges\n\n")
     params.close()
-
-    return sq_val, sq_vel, sq_for, idx1, idx2, sq_batt_idx
 
 @njit
 def formal_cr(kappa, n_capa, resist, n_wire):
@@ -323,7 +323,7 @@ def add_voltage_2_sq(q_potl, sq_for, sq_idx_1, sq_idx_2, u, sq_batt_idx):
     for idx, _ in enumerate(sq_for):
         sq_for[idx] += q_potl[ sq_idx_1[idx] ]
         sq_for[idx] -= q_potl[ sq_idx_2[idx] ]
-    sq_for[sq_batt_idx] += u
+    sq_for[sq_batt_idx] -= u	# change w.r.t. first version :-(
 
 def monitor_charges(moni, md_time, q, n_capa, n_wire, extra = None):
     # monitor q on capacitor, wire, terminals
@@ -387,6 +387,7 @@ def main(simul_mode = None, f_movie = False):
     # create and initialize split charges
     sq_val, sq_vel, sq_for, sq_idx_1, sq_idx_2, sq_batt_idx = \
     make_sq(kappa, p_sqe.r_cutoff, t_atom, simul_mode)
+    write_n_sqe(len(sq_val))
 
     # initialize atomic charges and potentials
     q_atom = np.zeros(len(r_atom), dtype=float)
